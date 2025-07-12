@@ -1,0 +1,544 @@
+---
+title: "Grade Data Analysis"
+author: "Elif Beyza Asan"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: united
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+options(repos = c(CRAN = "https://cloud.r-project.org"))
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 12, fig.height = 8)
+
+# Load required libraries
+library(scales) # For alpha() function
+```
+
+## 1. Introduction
+
+This report presents a comprehensive analysis of student academic performance spanning over 15 years of educational data. The dataset contains information about students across multiple departments, courses, and semesters, providing a unique opportunity to uncover patterns and relationships that influence academic success.
+
+My analysis focuses on understanding how various factors—including attendance, midterm performance, departmental differences, and temporal trends—interact to shape final academic outcomes. Through careful data preprocessing, normalization, and visualization, I aim to tell a compelling story about what drives student success in higher education.
+
+## 2. Data Overview and Initial Exploration
+
+Let's begin by loading and examining our dataset to understand its structure and characteristics.
+
+```{r load-data}
+# Load the dataset
+grades <- read.csv("grades.csv", as.is = TRUE)
+
+# Display basic information about the dataset
+# Dataset dimensions and column names will be shown in the text below
+head(grades)
+```
+
+#### Dataset Overview:
+- Dimensions: `r dim(grades)[1]` rows and `r dim(grades)[2]` columns
+- Columns: `r paste(names(grades), collapse = ", ")`
+
+### 2.1 Summary Statistics
+The summary statistics give a general picture of the dataset.
+
+- The Year variable ranges from 2010 to 2024, suggesting that the data spans over 14 academic years.
+- Midterm and Final scores range from 0 to 100, but many values are missing—87 for midterms and 195 for finals.
+- The average midterm score is around 35.5 and the average final score is about 43.3, indicating a relatively low performance overall.
+- The Attendance variable shows a wide range (0 to 1), with a mean close to 0.52, but also has a significant number of missing values (240).
+- Categorical variables like CourseCode, Department, and LetterGrade are not summarized numerically but indicate the structure and completeness of the data.
+
+Overall, this summary helps identify missing values and provides insight into the distribution of numeric variables like exam scores and attendance. 
+
+```{r summary}
+# Summary statistics for all variables
+summary(grades)
+```
+
+### 2.2 Removing Row Numbers
+Row numbers (X) do not carry meaningful information and are removed to keep the dataset clean.
+```{r remove-row-numbers}
+# Remove row numbers column if it exists
+if (names(grades)[1] == "X" || names(grades)[1] == "") {
+     grades <- grades[, -1]
+}
+```
+
+#### Key Observations:
+- The dataset spans `r max(grades$Year, na.rm = TRUE) - min(grades$Year, na.rm = TRUE) + 1` years of academic data
+- It includes `r length(unique(grades$Department))` different departments
+- Contains `r length(unique(grades$CourseCode))` unique courses
+- Covers `r nrow(grades)` student records across multiple semesters
+
+## 3. Data Quality and Missing Values Strategy
+
+### 3.1 Missing Values Analysis
+Before diving into analysis, I must address data quality issues, particularly missing values, which can significantly impact our findings.
+
+```{r missing-values}
+# Analyze missing values
+missing_counts <- colSums(is.na(grades))
+missing_percentages <- round(missing_counts / nrow(grades) * 100, 2)
+missing_summary <- data.frame(
+     Variable = names(missing_counts),
+     Missing_Count = missing_counts,
+     Missing_Percentage = missing_percentages
+)
+print(missing_summary)
+```
+
+#### Missing Values Analysis:
+
+My approach to handling missing values is tailored to each variable's role in the analysis:
+
+1. Midterm/Final Scores: I replace missing values with the mean score of the same course and semester, preserving course-specific grading patterns.
+2. Attendance: I use the median attendance rate within each course, as median is less sensitive to outliers.
+
+```{r handle-missing}
+# Handle missing Letter Grades first (remove rows)
+original_rows <- nrow(grades)
+grades <- grades[!is.na(grades$LetterGrade), ]
+removed_rows <- original_rows - nrow(grades)
+
+# Function to fill missing values by group
+fill_missing <- function(x, group_cols) {
+     groups <- do.call(paste, c(group_cols, sep = "_"))
+     ave(x, groups, FUN = function(x) {
+          x[is.na(x)] <- mean(x, na.rm = TRUE)
+          return(x)
+     })
+}
+
+# Fill missing Midterm scores
+grades$Midterm <- fill_missing(
+     grades$Midterm,
+     list(grades$CourseCode, grades$Semester)
+)
+
+# Fill missing Final scores
+grades$Final <- fill_missing(
+     grades$Final,
+     list(grades$CourseCode, grades$Semester)
+)
+
+# Fill missing Attendance with course medians
+grades$Attendance <- ave(grades$Attendance, grades$CourseCode,
+     FUN = function(x) {
+          x[is.na(x)] <- median(x, na.rm = TRUE)
+          return(x)
+     }
+)
+
+# Verify no missing values remain in key variables
+print("Remaining missing values after cleaning:")
+print(colSums(is.na(grades)))
+```
+
+#### Data Cleaning Results:
+- Filled missing Midterm and Final scores with course-semester means
+- Filled missing Attendance with course medians
+
+## 3.2 Score Normalization: Ensuring Fair Comparisons
+
+Raw scores can be misleading when comparing performance across different courses and semesters due to varying difficulty levels and grading standards. I implement z-score normalization to create fair comparisons.
+
+```{r normalization}
+# Function to calculate z-scores by group
+normalize_by_group <- function(x, group_cols) {
+     groups <- do.call(paste, c(group_cols, sep = "_"))
+     ave(x, groups, FUN = function(x) {
+          (x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE)
+     })
+}
+
+# Normalize Midterm and Final scores within each course & semester
+grades$Midterm_norm <- normalize_by_group(
+     grades$Midterm,
+     list(grades$CourseCode, grades$Semester)
+)
+grades$Final_norm <- normalize_by_group(
+     grades$Final,
+     list(grades$CourseCode, grades$Semester)
+)
+```
+
+#### Normalization Results:
+- Midterm - Mean: `r round(mean(grades$Midterm_norm, na.rm = TRUE), 3)`, SD: `r round(sd(grades$Midterm_norm, na.rm = TRUE), 3)`
+- Final - Mean: `r round(mean(grades$Final_norm, na.rm = TRUE), 3)`, SD: `r round(sd(grades$Final_norm, na.rm = TRUE), 3)`
+
+#### Why I Don't Normalize Attendance:
+Attendance remains unnormalized because:
+- It's already on a consistent 0-1 scale
+- Absolute values are meaningful (e.g., 80% attendance has universal significance)
+- I want to preserve actual attendance patterns for interpretation
+
+### 3.3 Converting Letter Grades to Numeric Scale
+
+To enable quantitative analysis, I convert letter grades to their GPA equivalents according to the university's grading system.
+
+```{r grade-conversion}
+# Convert letter grades to numeric values based on university catalog
+grades$numeric_grade <- NA
+grades$numeric_grade[grades$LetterGrade == "A+"] <- 4.0
+grades$numeric_grade[grades$LetterGrade == "A"] <- 4.0
+grades$numeric_grade[grades$LetterGrade == "A-"] <- 3.7
+grades$numeric_grade[grades$LetterGrade == "B+"] <- 3.3
+grades$numeric_grade[grades$LetterGrade == "B"] <- 3.0
+grades$numeric_grade[grades$LetterGrade == "B-"] <- 2.7
+grades$numeric_grade[grades$LetterGrade == "C+"] <- 2.3
+grades$numeric_grade[grades$LetterGrade == "C"] <- 2.0
+grades$numeric_grade[grades$LetterGrade == "C-"] <- 1.7
+grades$numeric_grade[grades$LetterGrade == "D+"] <- 1.3
+grades$numeric_grade[grades$LetterGrade == "D"] <- 1.0
+grades$numeric_grade[grades$LetterGrade == "F"] <- 0.0
+grades$numeric_grade[grades$LetterGrade == "FX"] <- 0.0
+grades$numeric_grade[grades$LetterGrade == "FZ"] <- 0.0
+
+# Replace the original letter grade column
+grades <- grades[, !(names(grades) %in% "LetterGrade")]
+names(grades)[names(grades) == "numeric_grade"] <- "LetterGrade"
+
+# Display grade distribution
+print("Grade Point Distribution:")
+print(table(grades$LetterGrade))
+```
+
+#### Grade Conversion Summary:
+Letter grades have been converted to their GPA equivalents according to the university's grading system.
+
+## 4. Exploring Academic Performance Patterns
+
+Now I dive into the core of our analysis, exploring how different factors influence academic performance across our 15-year dataset.
+
+I begin by examining the scope of our dataset:
+
+- Departments Represented: 20, with a heavy concentration in ECON (939 records), followed by MAN (227) and CTIS (113).
+- Courses Analyzed: 3 unique courses (as identified earlier).
+- Years Covered: From 2010 to 2024, with most records concentrated in 2023 (499) and 2024 (333).
+- Semester Breakdown: Most data comes from the Fall semester (782), followed by Spring (473) and Summer (162).
+Total Student Records: 1,417.
+This overview highlights a clear departmental imbalance and a recent increase in data volume, which are important context points for interpreting performance trends.
+
+```{r performance-analysis}
+library(colorspace)
+
+# Basic categorical variable analysis
+# Department distribution
+dept_dist <- sort(table(grades$Department), decreasing = TRUE)
+
+# Year distribution
+year_dist <- table(grades$Year)
+
+# Semester distribution
+sem_dist <- table(grades$Semester)
+```
+
+#### Academic Landscape Overview:
+- Departments in Study: `r length(unique(grades$Department))`
+- Unique Courses Analyzed: `r length(unique(grades$CourseCode))`
+- Years Covered: `r min(grades$Year)` to `r max(grades$Year)`
+- Total Student Records: `r nrow(grades)`
+
+#### Students per Department:
+```{r dept-distribution}
+print(dept_dist)
+```
+
+#### Records per Year:
+```{r year-distribution}
+print(year_dist)
+```
+
+#### Semester Distribution:
+```{r semester-distribution}
+print(sem_dist)
+```
+
+## 5. Key Performance Insights
+
+This section summarizes the most important findings regarding student performance, with a focus on departmental differences, temporal trends, and the impact of attendance.
+
+```{r performance-insights}
+# Calculate key performance metrics
+
+# Overall performance metrics
+overall_gpa <- round(mean(grades$LetterGrade, na.rm = TRUE), 3)
+overall_attendance <- round(mean(grades$Attendance, na.rm = TRUE), 3)
+
+# Departmental performance analysis
+dept_performance <- tapply(grades$LetterGrade, grades$Department, mean, na.rm = TRUE)
+dept_performance <- sort(dept_performance, decreasing = TRUE)
+
+# Year-over-year trends
+year_performance <- tapply(grades$LetterGrade, grades$Year, mean, na.rm = TRUE)
+year_correlation <- cor(as.numeric(names(year_performance)), year_performance)
+
+# Attendance impact analysis
+high_attendance <- grades[grades$Attendance > 0.8, ]
+low_attendance <- grades[grades$Attendance <= 0.8, ]
+```
+
+#### Overall Metrics:
+- Average GPA: `r overall_gpa`
+- Average Attendance: `r overall_attendance`
+
+#### Departmental Performance Rankings:
+There is a wide disparity in academic success across departments. The highest-performing departments by average GPA are:
+```{r dept-rankings}
+for (i in 1:length(dept_performance)) {
+     cat(sprintf("%d. %s: %.3f GPA\n", i, names(dept_performance)[i], dept_performance[i]))
+}
+```
+This stark contrast may point to grading policies, course difficulty, or student preparedness differences across departments.
+
+#### Academic Performance Trends by Year:
+- Trend: GPA has shown a `r if(year_correlation > 0) "Improving" else "Declining"` pattern over the years.
+- Correlation between year and GPA: `r year_correlation`
+This suggests that either academic standards have become stricter, or student performance has been dropping over time.
+
+#### Attendance Impact Analysis:
+- High Attendance (>80%) Average GPA: `r round(mean(high_attendance$LetterGrade, na.rm = TRUE), 3)`
+- Low Attendance (≤80%) Average GPA: `r round(mean(low_attendance$LetterGrade, na.rm = TRUE), 3)`
+- Performance Gap: `r round(mean(high_attendance$LetterGrade, na.rm = TRUE) - mean(low_attendance$LetterGrade, na.rm = TRUE), 3)` GPA points
+
+
+## 6. Correlation Perspective
+
+To better understand how different variables interact, a correlation analysis was conducted:
+
+```{r correlation-analysis}
+# Create correlation matrix for numerical variables
+numerical_vars <- grades[, c("Midterm_norm", "Final_norm", "Attendance", "LetterGrade")]
+correlation_matrix <- cor(numerical_vars, use = "complete.obs")
+
+# Find strongest relationships
+upper_tri <- correlation_matrix
+upper_tri[lower.tri(upper_tri, diag = TRUE)] <- NA
+max_corr_pos <- which(abs(upper_tri) == max(abs(upper_tri), na.rm = TRUE), arr.ind = TRUE)
+max_corr_value <- upper_tri[max_corr_pos]
+```
+
+#### Correlation Analysis:
+```{r correlation-matrix}
+print(round(correlation_matrix, 3))
+```
+
+#### Strongest Relationship:
+- `r rownames(correlation_matrix)[max_corr_pos[1]]` ↔ `r colnames(correlation_matrix)[max_corr_pos[2]]` = `r round(max_corr_value, 3)`
+- Final scores and attendance also show moderate positive correlations with GPA.
+  
+These results emphasize that early academic performance (midterms) is a strong predictor of overall success, followed by final performance and attendance.
+
+## 7. Visual Relationship Analysis
+
+These visualizations helped me explore how academic performance relates to different factors. Below are the main insights I derived from each plot:
+
+- Midterm → Final Performance (Academic Consistency)
+  There is a moderate positive trend: students who perform well in the midterm generally also perform well in the final. However, the relationship isn't strictly linear, suggesting that final exam outcomes are influenced by more than just midterm scores.
+
+- Midterm → Attendance (Engagement & Early Performance)
+  There's a wide spread in attendance across all midterm scores. Still, students with higher midterm scores tend to cluster more in higher attendance ranges, hinting at a loose association between engagement and early performance.
+
+- Final → Attendance (Persistence Pays Off)
+  This relationship appears stronger than the midterm-attendance one. Lower attendance is more frequently associated with lower final scores, which suggests that consistent attendance plays a role in sustained academic success.
+
+- Midterm → GPA (Early Indicator of Success)
+  Students with higher midterm scores tend to earn higher final grades (GPA), although the relationship is not perfectly clean. This supports the idea that midterm results can act as early indicators of academic outcomes.
+
+- Final → GPA (Final Exam Impact)
+  This correlation is slightly clearer than the one with midterm scores. Final exam scores seem to have a more direct impact on overall GPA, reflecting their typical weight in grade calculations.
+
+- Attendance → GPA (The Golden Rule of Success)
+  Students with higher attendance rates generally achieve higher GPAs. This suggests that attendance is one of the strongest and most consistent predictors of academic success across the dataset.
+
+```{r relationship-visualization, fig.height=12, fig.width=15}
+library(colorspace)
+set.seed(123)
+
+# Renk paletleri
+att_colors <- sequential_hcl(10, palette = "Viridis")  # Attendance için
+dept_colors <- qualitative_hcl(length(unique(grades$Department)), palette = "Dark 3")
+names(dept_colors) <- unique(grades$Department)
+
+year_colors <- qualitative_hcl(length(unique(grades$Year)), palette = "Set 2")
+names(year_colors) <- as.character(unique(grades$Year))
+
+course_colors <- qualitative_hcl(length(unique(grades$CourseCode)), palette = "Set 3")
+names(course_colors) <- unique(grades$CourseCode)
+
+sem_colors <- qualitative_hcl(length(unique(grades$Semester)), palette = "Dark 2")
+names(sem_colors) <- unique(grades$Semester)
+
+# Attendance'ı 10 parçaya bölerek renklere bağla
+att_breaks <- cut(grades$Attendance, breaks = 10, labels = FALSE)
+
+# Grafik düzeni: 2x3
+par(mfrow = c(2, 3), mar = c(4, 4, 3, 2), oma = c(0, 0, 2, 0))
+
+# 1. Midterm vs Final (renk: Attendance, boyut: Attendance)
+plot(grades$Midterm_norm, grades$Final_norm,
+     main = "Midterm vs Final (Colored by Attendance)",
+     xlab = "Normalized Midterm Score",
+     ylab = "Normalized Final Score",
+     pch = 19,
+     col = att_colors[att_breaks],
+     cex = grades$Attendance)
+legend("topright",
+       title = "Attendance Rate",
+       legend = round(seq(min(grades$Attendance, na.rm = TRUE),
+                          max(grades$Attendance, na.rm = TRUE),
+                          length.out = 5), 2),
+       col = att_colors[seq(1, 10, length.out = 5)],
+       pch = 19)
+
+# 2. Midterm vs Attendance (renk: Department, boyut: GPA)
+plot(grades$Midterm_norm, grades$Attendance,
+     main = "Midterm vs Attendance (by Department)",
+     xlab = "Normalized Midterm Score",
+     ylab = "Attendance Rate",
+     pch = 19,
+     col = dept_colors[grades$Department],
+     cex = grades$LetterGrade / 2)
+legend("topleft", legend = names(dept_colors),
+       col = dept_colors, pch = 19, cex = 0.7)
+
+# 3. Final vs Attendance (renk: Year, boyut: GPA)
+plot(grades$Final_norm, grades$Attendance,
+     main = "Final vs Attendance (by Year)",
+     xlab = "Normalized Final Score",
+     ylab = "Attendance Rate",
+     pch = 19,
+     col = year_colors[as.character(grades$Year)],
+     cex = grades$LetterGrade / 2)
+legend("topleft", legend = names(year_colors),
+       col = year_colors, pch = 19, cex = 0.7)
+
+# 4. Midterm vs Letter Grade (renk: Course, boyut: Attendance)
+plot(grades$Midterm_norm, grades$LetterGrade,
+     main = "Midterm vs GPA (by Course)",
+     xlab = "Normalized Midterm Score",
+     ylab = "Final GPA",
+     pch = 19,
+     col = course_colors[grades$CourseCode],
+     cex = grades$Attendance)
+legend("topleft", legend = names(course_colors),
+       col = course_colors, pch = 19, cex = 0.7)
+
+# 5. Final vs Letter Grade (renk: Semester, boyut: Attendance)
+plot(grades$Final_norm, grades$LetterGrade,
+     main = "Final vs GPA (by Semester)",
+     xlab = "Normalized Final Score",
+     ylab = "Final GPA",
+     pch = 19,
+     col = sem_colors[grades$Semester],
+     cex = grades$Attendance)
+legend("topleft", legend = names(sem_colors),
+       col = sem_colors, pch = 19, cex = 0.7)
+
+# 6. Attendance vs Letter Grade (renk: Department, boyut: Final Score)
+plot(grades$Attendance, grades$LetterGrade,
+     main = "Attendance vs GPA (by Department)",
+     xlab = "Attendance Rate",
+     ylab = "Final GPA",
+     pch = 19,
+     col = dept_colors[grades$Department],
+     cex = sqrt(grades$Final_norm - min(grades$Final_norm, na.rm = TRUE) + 1))
+legend("topleft", legend = names(dept_colors),
+       col = dept_colors, pch = 19, cex = 0.7)
+
+# Üst başlık
+mtext("Comprehensive Academic Visualization (R Graphics Demo)", outer = TRUE, cex = 1.4, font = 2)
+```
+
+## 8. Story: Lessons from 15 Years
+
+```{r final-insights}
+# Calculate comprehensive statistics
+total_students <- nrow(grades)
+years_span <- max(grades$Year) - min(grades$Year) + 1
+num_departments <- length(unique(grades$Department))
+num_courses <- length(unique(grades$CourseCode))
+
+# Three Key Factors of Academic Success
+
+# 1. Attendance - The Foundation
+att_corr <- cor(grades$Attendance, grades$LetterGrade, use = "complete.obs")
+
+# 2. Consistency - The Bridge
+mid_final_corr <- cor(grades$Midterm_norm, grades$Final_norm, use = "complete.obs")
+
+# 3. Department Culture
+best_dept <- names(sort(dept_performance, decreasing = TRUE))[1]
+worst_dept <- names(sort(dept_performance, decreasing = TRUE))[length(dept_performance)]
+
+# Temporal trends
+recent_years <- grades[grades$Year >= (max(grades$Year) - 2), ]
+early_years <- grades[grades$Year <= (min(grades$Year) + 2), ]
+```
+
+I analyzed `r total_students` student journeys across `r num_departments` departments, spanning `r num_courses` different courses.
+
+#### Three Key Factors of Academic Success
+
+1. Attendance - The Foundation Stone
+- Correlation with GPA: `r round(att_corr, 3)`
+- Students with >90% attendance achieve `r round(mean(grades$LetterGrade[grades$Attendance > 0.9], na.rm = TRUE), 3)` average GPA
+- Students with <70% attendance achieve `r round(mean(grades$LetterGrade[grades$Attendance < 0.7], na.rm = TRUE), 3)` average GPA
+
+2. Consistency - The Bridge to Success
+- Midterm-Final correlation: `r round(mid_final_corr, 3)`
+- Students who perform well in midterms maintain their excellence
+- Recovery from poor midterm performance is challenging but possible
+
+3. Departmental Influence - The Environment Effect
+- Best performing department: `r best_dept` with `r round(dept_performance[best_dept], 3)` average GPA
+- Most challenging department: `r worst_dept` with `r round(dept_performance[worst_dept], 3)` average GPA
+- Performance gap: `r round(dept_performance[best_dept] - dept_performance[worst_dept], 3)` GPA points
+
+#### Evolution Over Time
+
+- Early years (`r min(grades$Year)`-`r min(grades$Year) + 2`) average GPA: `r round(mean(early_years$LetterGrade, na.rm = TRUE), 3)`
+- Recent years (`r max(grades$Year) - 2`-`r max(grades$Year)`) average GPA: `r round(mean(recent_years$LetterGrade, na.rm = TRUE), 3)`
+- Academic improvement over time: `r round(mean(recent_years$LetterGrade, na.rm = TRUE) - mean(early_years$LetterGrade, na.rm = TRUE), 3)` GPA points
+
+## 9. Actionable Recommendations
+
+Based on our comprehensive analysis, here are evidence-based recommendations for improving academic outcomes:
+
+#### For Students:
+
+1. Prioritize Attendance: Students with >80% attendance are `r round(mean(high_attendance$LetterGrade) / mean(low_attendance$LetterGrade), 2)` times more likely to achieve higher GPAs
+2. Focus on Midterm Preparation: Strong midterm performance (correlation = `r round(cor(grades$Midterm_norm, grades$LetterGrade, use = "complete.obs"), 3)`) strongly predicts final success
+3. Maintain Consistency: The correlation between midterm and final performance is `r round(mid_final_corr, 3)`
+
+#### For Educators:
+
+1. Implement Early Warning Systems: Monitor attendance and midterm performance
+2. Departmental Best Practices: Study successful departments' approaches
+3. Seasonal Adjustments: Consider semester-specific support strategies
+
+#### For Institutions:
+
+1. Attendance Policies: Strict attendance requirements show measurable benefits
+2. Department Standardization: Address `r round(max(dept_performance) - min(dept_performance), 3)` GPA point gap between departments
+3. Continuous Improvement: Build on the `r if(year_correlation > 0) "positive" else "negative"` trend observed over `r years_span` years
+
+## 10. Conclusion: The Recipe for Academic Success
+
+Our analysis of 15 years of academic data reveals a clear recipe for student success. The strongest predictor of academic achievement is not innate ability, but rather consistent engagement as measured by attendance. Students who show up, participate, and maintain their effort throughout the semester consistently outperform their peers.
+
+The data tells us that academic success is not a mystery—it follows predictable patterns:
+
+- The 80% Rule: Students with attendance above 80% show dramatically better outcomes across all metrics.
+
+- Early Indicators Matter: Midterm performance serves as a crucial predictor of final outcomes, making early intervention essential.
+
+- Consistency Trumps Brilliance: Regular, steady performance throughout the semester yields better results than sporadic excellence.
+
+- Environment Influences Outcomes: Departmental culture and practices create measurable differences in student achievement.
+
+This analysis provides not just insights, but actionable intelligence for improving educational outcomes. The patterns we've uncovered offer a roadmap for students seeking success, educators designing interventions, and institutions committed to academic excellence.
+
+The story our data tells is ultimately optimistic: academic success is achievable and predictable when students, educators, and institutions align their efforts around the fundamental principles of engagement, consistency, and continuous improvement.
+
+---

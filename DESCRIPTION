@@ -1,0 +1,25 @@
+Package: GradeAnalysis
+Type: Project
+Title: Student Grade Analysis Project
+Version: 1.0.0
+Date: 2024-12-19
+Authors@R: person("Elif Beyza", "Asan", email = "", role = c("aut", "cre"))
+Description: A comprehensive analysis of student academic performance data.
+    This project demonstrates data preprocessing, visualization, and statistical
+    analysis techniques using R. The analysis explores patterns in student
+    performance across departments, courses, and time periods.
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 7.2.3
+Depends: 
+    R (>= 4.0.0)
+Imports:
+    colorspace,
+    ggplot2,
+    dplyr,
+    rmarkdown,
+    knitr
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3 
